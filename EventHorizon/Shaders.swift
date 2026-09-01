@@ -145,16 +145,21 @@ fragment float4 fsMain(VOut vin [[stage_in]],
     float dmix = mix(U.mixLeft, U.mixRight,
                      smoothstep(U.frontX - U.frontSoft, U.frontX, capPx.x));
 
-    // Flip to a y-up frame centred on the hole.
-    float2 uv = float2(capPx.x - U.holeCap.x, U.holeCap.y - capPx.y) / U.pxPerUnit;
+    // The camera's forward axis meets the screen at its centre, and the hole is
+    // positioned by moving the camera sideways rather than by shifting the
+    // image. That is what makes it a three dimensional object crossing the
+    // screen - the disk turns, foreshortens, and the Doppler-bright side swaps
+    // - instead of a rigid picture sliding across.
+    float2 centrePx = U.capSize * 0.5;
+    float2 uv     = float2(capPx.x - centrePx.x, centrePx.y - capPx.y) / U.pxPerUnit;
+    float2 holeUV = float2(U.holeCap.x - centrePx.x, centrePx.y - U.holeCap.y) / U.pxPerUnit;
 
-    // Camera sits on +Z looking at the hole; the desktop is a flat plane at
-    // z = -planeDist. Choosing the ray as (uv, -1) makes the *undeflected*
-    // mapping exactly the identity, so away from the hole the screen is
-    // reproduced pixel for pixel.
-    float3 camPos = float3(0.0, 0.0, U.camDist);
+    // Placing the camera here puts the hole (always at the origin) exactly on
+    // holeCap, because the ray toward the origin has uv == holeUV.
+    float3 camPos = float3(-holeUV * U.camDist, U.camDist);
     float3 rd     = normalize(float3(uv, -1.0));
     float  planeK = U.camDist + U.planeDist;
+    float  camR   = length(camPos);
 
     // Impact parameter drives the step size: grazing rays need fine steps,
     // far-field rays are almost straight and finish in a handful.
@@ -164,14 +169,14 @@ fragment float4 fsMain(VOut vin [[stage_in]],
     // thickness, or the volume integration bands.
     if (b < DISK_OUT + 1.0) dphi = min(dphi, 0.026);
 
-    float3 e1 = float3(0.0, 0.0, 1.0);
+    float3 e1 = camPos / camR;
     float3 tv = rd - dot(rd, e1) * e1;
     float  tl = length(tv);
-    float3 e2 = tl > 1e-6 ? tv / tl : float3(1.0, 0.0, 0.0);
+    float3 e2 = tl > 1e-6 ? tv / tl : normalize(cross(e1, float3(0.0, 1.0, 0.0)));
     tl = max(tl, 1e-6);
 
-    float u  = 1.0 / U.camDist;
-    float du = -dot(rd, e1) / (U.camDist * tl);
+    float u  = 1.0 / camR;
+    float du = -dot(rd, e1) / (camR * tl);
 
     float cd = cos(dphi), sd = sin(dphi);
     float cp = 1.0, sp = 0.0;
@@ -279,15 +284,18 @@ fragment float4 fsMain(VOut vin [[stage_in]],
     float2 srcCapPx = capPx;
     float  onScreen = 0.0;
     if (hitPlane && !captured) {
-        float2 srcUV = planeXY / planeK;
+        // Undeflected this is exactly uv again, so the far field reproduces the
+        // screen pixel for pixel.
+        float2 srcUV = (planeXY - camPos.xy) / planeK;
         // Wind the sampled desktop around the hole so content visibly spirals in.
         if (U.swirl > 0.0001) {
-            float rr = length(srcUV);
+            float2 rel = srcUV - holeUV;
+            float rr = length(rel);
             float a  = U.swirl / (rr + 0.35);
             float ca = cos(a), sa = sin(a);
-            srcUV = float2(srcUV.x * ca - srcUV.y * sa, srcUV.x * sa + srcUV.y * ca);
+            srcUV = holeUV + float2(rel.x * ca - rel.y * sa, rel.x * sa + rel.y * ca);
         }
-        srcCapPx = U.holeCap + float2(srcUV.x, -srcUV.y) * U.pxPerUnit;
+        srcCapPx = centrePx + float2(srcUV.x, -srcUV.y) * U.pxPerUnit;
 
         // Confine the warp to a neighbourhood of the hole. Lensing falls off as
         // 1/b, which would visibly displace the whole screen; this decays it to

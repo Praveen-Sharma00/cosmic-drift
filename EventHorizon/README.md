@@ -1,5 +1,7 @@
 # Event Horizon
 
+![A black hole crossing a desktop, lensing the windows around it](../docs/over-desktop.png)
+
 A menu bar break timer. When the timer runs out a black hole crosses your screen,
 lensing your actual windows around itself and eating them as it passes. It leaves
 you sitting in front of empty space for the length of your break, then crosses
@@ -113,7 +115,16 @@ If it ever wedges, `pkill -f EventHorizon` removes it.
 
 ## How the effect is shaped
 
-Two things keep it from being a screen-wide mush:
+**It is a real object, not a sprite.** The camera's forward axis is fixed at the
+screen centre and the hole is positioned by moving the camera sideways, not by
+shifting the image. It therefore turns as it crosses — the disk foreshortens, the
+lensing goes asymmetric, and the Doppler-bright side swaps. Rendering the same
+instant with the hole at three screen positions gives images that differ by 17-24
+levels out of 255; translating a sprite would give exactly zero.
+
+![The same moment with the hole at three screen positions](../docs/parallax.png)
+
+Two more things keep it from being a screen-wide mush:
 
 **The warp is local.** Gravitational lensing falls off as 1/b, which would visibly
 displace the entire screen — at a realistic hole size the far corners still shift
