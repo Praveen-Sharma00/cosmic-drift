@@ -92,10 +92,10 @@ static inline float diskTurb(float r, float a, float z,
 
 // Warm blackbody ramp: cool red at the rim, white hot at the inner edge.
 static inline float3 diskColor(float t) {
-    float3 c = mix(float3(0.30, 0.045, 0.008), float3(1.0, 0.30, 0.035),
+    float3 c = mix(float3(0.26, 0.085, 0.035), float3(0.95, 0.44, 0.17),
                    smoothstep(0.00, 0.38, t));
-    c = mix(c, float3(1.0, 0.72, 0.34), smoothstep(0.34, 0.68, t));
-    c = mix(c, float3(1.0, 0.96, 0.90), smoothstep(0.66, 1.0, t));
+    c = mix(c, float3(1.0, 0.82, 0.62), smoothstep(0.34, 0.68, t));
+    c = mix(c, float3(1.0, 0.98, 0.98), smoothstep(0.66, 1.0, t));
     return c;
 }
 
@@ -117,8 +117,8 @@ static inline float3 starfield(float3 d) {
         }
     }
     float n = fbm(d * 2.6 + 11.0);
-    col += pow(max(n - 0.54, 0.0), 2.0) * float3(0.10, 0.15, 0.34) * 1.9;
-    col += float3(0.010, 0.019, 0.042);          // faint ambient, not flat black
+    col += pow(max(n - 0.54, 0.0), 2.0) * float3(0.10, 0.15, 0.34) * 1.1;
+    col += float3(0.0030, 0.0055, 0.0130);       // faint ambient, not flat black
     return col * 0.6;
 }
 
@@ -132,7 +132,12 @@ static inline float3 aces(float3 x) {
     return saturate((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14));
 }
 
-fragment float4 fsMain(VOut vin [[stage_in]],
+struct FragOut {
+    float4 scene [[color(0)]];
+    float4 glow  [[color(1)]];
+};
+
+fragment FragOut fsMain(VOut vin [[stage_in]],
                        constant Uniforms &U [[buffer(0)]],
                        texture2d<float> screenTex [[texture(0)]]) {
     constexpr sampler smp(filter::linear, address::clamp_to_edge, coord::normalized);
@@ -150,6 +155,12 @@ fragment float4 fsMain(VOut vin [[stage_in]],
     // image. That is what makes it a three dimensional object crossing the
     // screen - the disk turns, foreshortens, and the Doppler-bright side swaps
     // - instead of a rigid picture sliding across.
+    // Distance-based falloff, shared by the warp and the dimming below. Both
+    // must reach zero together or the overlay ends on a visible circular seam.
+    float rpx   = distance(capPx, U.holeCap);
+    float tt    = rpx / max(U.warpReach, 1.0);
+    float taper = exp(-2.6 * tt * tt * tt);
+
     float2 centrePx = U.capSize * 0.5;
     float2 uv     = float2(capPx.x - centrePx.x, centrePx.y - capPx.y) / U.pxPerUnit;
     float2 holeUV = float2(U.holeCap.x - centrePx.x, centrePx.y - U.holeCap.y) / U.pxPerUnit;
@@ -223,7 +234,7 @@ fragment float4 fsMain(VOut vin [[stage_in]],
         // A thin plane crossing is what made it read as a flat painted ring.
         if (r > DISK_IN && r < DISK_OUT) {
             float hgt = abs(dot(p, N));
-            float hh  = 0.06 + 0.032 * r;          // flares outward
+            float hh  = 0.045 + 0.022 * r;          // flares outward
             if (hgt < hh) {
                 float q    = hgt / hh;
                 float vert = exp(-3.0 * q * q);
@@ -315,6 +326,11 @@ fragment float4 fsMain(VOut vin [[stage_in]],
         float3 sky = enc(starfield(lastDir));
         float3 desktop = screenTex.sample(smp, srcCapPx / U.capSize).rgb;
         bg = mix(sky, desktop, onScreen * dmix);
+        // Light that skims the hole is dimmed toward the shadow. Lensing really
+        // conserves surface brightness, so this is a deliberate cheat: the disk
+        // is emissive and additive, and against a white desktop it would add
+        // nothing and vanish. This gives it something to be bright against.
+        bg *= mix(1.0, 0.34, taper * (1.0 - smoothstep(BC * 1.05, BC * 3.0, b)));
     }
 
     float3 emit = enc(aces(acc * U.exposure));
@@ -332,6 +348,77 @@ fragment float4 fsMain(VOut vin [[stage_in]],
     a = saturate(a) * U.fade;
 
     col += (hash21(fragPx + fract(U.time) * 91.7) - 0.5) * 0.006;
-    return float4(max(col, 0.0) * a, a);   // premultiplied
+
+    FragOut o;
+    o.scene = float4(max(col, 0.0) * a, a);           // premultiplied
+    // Zero alpha: the halo is additive light over whatever is behind, and must
+    // not darken or occlude the desktop the way an alpha-carrying layer would.
+    o.glow = float4(emit * U.fade, 0.0);
+    return o;
+}
+
+// ---------------------------------------------------------------- bloom
+// The disk is the only thing bright enough to glow, and a real glow is what
+// separates this from a flat render. Bright-pass and blur run at quarter
+// resolution; everything stays premultiplied so the halo composites correctly
+// over the desktop.
+
+struct PostU {
+    float2 dstSize;
+    float2 dir;          // blur step, in destination pixels
+    float  strength;
+    float  threshold;
+    float  pad0;
+    float  pad1;
+};
+
+struct PostOut {
+    float4 pos [[position]];
+};
+
+vertex PostOut vsPost(uint vid [[vertex_id]]) {
+    float2 p[3] = { float2(-1.0, -3.0), float2(-1.0, 1.0), float2(3.0, 1.0) };
+    PostOut o;
+    o.pos = float4(p[vid], 0.0, 1.0);
+    return o;
+}
+
+fragment float4 fsBright(PostOut vin [[stage_in]],
+                         constant PostU &P [[buffer(0)]],
+                         texture2d<float> src [[texture(0)]]) {
+    constexpr sampler smp(filter::linear, address::clamp_to_edge, coord::normalized);
+    float2 uv = vin.pos.xy / P.dstSize;
+    float4 c = src.sample(smp, uv);
+    float lum = dot(c.rgb, float3(0.299, 0.587, 0.114));
+    float k = max(lum - P.threshold, 0.0) / max(lum, 1e-4);
+    return c * k;
+}
+
+fragment float4 fsBlur(PostOut vin [[stage_in]],
+                       constant PostU &P [[buffer(0)]],
+                       texture2d<float> src [[texture(0)]]) {
+    constexpr sampler smp(filter::linear, address::clamp_to_edge, coord::normalized);
+    float2 uv = vin.pos.xy / P.dstSize;
+    float2 d = P.dir / P.dstSize;
+    const float w[5] = { 0.227027, 0.194595, 0.121622, 0.054054, 0.016216 };
+    float4 sum = src.sample(smp, uv) * w[0];
+    for (int i = 1; i < 5; i++) {
+        sum += src.sample(smp, uv + d * float(i)) * w[i];
+        sum += src.sample(smp, uv - d * float(i)) * w[i];
+    }
+    return sum;
+}
+
+fragment float4 fsComposite(PostOut vin [[stage_in]],
+                            constant PostU &P [[buffer(0)]],
+                            texture2d<float> scene [[texture(0)]],
+                            texture2d<float> bloom [[texture(1)]]) {
+    constexpr sampler smp(filter::linear, address::clamp_to_edge, coord::normalized);
+    float2 uv = vin.pos.xy / P.dstSize;
+    float4 s = scene.sample(smp, uv);
+    float4 b = bloom.sample(smp, uv) * P.strength;
+    // Both are premultiplied, so the sum is too. The halo also carries alpha,
+    // or it would be invisible where the overlay is otherwise transparent.
+    return float4(saturate(s.rgb + b.rgb), saturate(s.a + b.a));
 }
 """

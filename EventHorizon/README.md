@@ -124,6 +124,14 @@ levels out of 255; translating a sprite would give exactly zero.
 
 ![The same moment with the hole at three screen positions](../docs/parallax.png)
 
+**It reads on any background.** The disk is emissive and additive, so against a
+white desktop it added nothing and simply vanished, leaving a black ball. Two
+things fix that: background light skimming the hole is dimmed toward the shadow
+(a deliberate cheat — lensing really conserves surface brightness), and the disk
+gets a real bloom pass. The glow is rendered to its own target via MRT so it
+comes only from the disk's emission; bright desktop content must never glow.
+Bright-pass and blur run at quarter resolution and cost about 0.2 ms.
+
 Two more things keep it from being a screen-wide mush:
 
 **The warp is local.** Gravitational lensing falls off as 1/b, which would visibly

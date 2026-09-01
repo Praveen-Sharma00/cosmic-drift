@@ -50,6 +50,8 @@ byte-identical. They differ by 17–24 levels out of 255.
   redshift, and an `r^-3/4` temperature profile driving a blackbody ramp
 - Turbulence that mixes a sheared layer with a solid-body one, so the gas forms
   filaments without winding into concentric rings
+- A bloom pass fed from a separate emission target, so the disk glows but bright
+  desktop content never does
 
 ## Building
 
