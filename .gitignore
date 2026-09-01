@@ -1,0 +1,10 @@
+# Build output
+build/
+
+# Icon generation intermediates (AppIcon.icns is committed; these are not)
+EventHorizon/tools/makeicon
+EventHorizon/tools/main.swift
+EventHorizon/tools/AppIcon.iconset/
+
+.DS_Store
+*.o
