@@ -8,3 +8,6 @@ EventHorizon/tools/AppIcon.iconset/
 
 .DS_Store
 *.o
+
+# Reference images collected while iterating - third-party artwork, not ours
+*.webp
